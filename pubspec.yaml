@@ -86,6 +86,7 @@ dependencies:
   ffi: ^2.1.4
 
   # Miscellaneous
+  encrypt: ^5.0.3
   device_info_plus: ^11.5.0
   package_info_plus: ^8.3.0
   file_picker: ^10.2.0

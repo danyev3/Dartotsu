@@ -6,7 +6,9 @@ import 'package:app_links/app_links.dart';
 import 'package:dartotsu/Functions/Extensions.dart';
 import 'package:dartotsu/Functions/Function.dart';
 import 'package:dartotsu/Screens/Anime/Player/MpvConfig.dart';
+import 'package:dartotsu/Functions/DeviceType.dart';
 import 'package:dartotsu/Screens/Login/LoginScreen.dart';
+import 'package:dartotsu/Screens/Login/LoginTvScreen.dart';
 import 'package:dartotsu/Screens/Manga/MangaScreen.dart';
 import 'package:dartotsu_extension_bridge/Aniyomi/AniyomiExtensions.dart';
 import 'package:dartotsu_extension_bridge/Mangayomi/MangayomiExtensions.dart';
@@ -274,6 +276,7 @@ late FloatingBottomNavBar navbar;
 
 class MainActivityState extends State<MainActivity> {
   final _selectedIndex = 1.obs;
+  bool _isTV = false;
 
   void _onTabSelected(int index) => _selectedIndex.value = index;
 
@@ -281,6 +284,16 @@ class MainActivityState extends State<MainActivity> {
   void initState() {
     super.initState();
     checkForUpdate();
+    _checkDeviceType();
+  }
+
+  void _checkDeviceType() async {
+    final isTV = await isAndroidTV();
+    if (mounted) {
+      setState(() {
+        _isTV = isTV;
+      });
+    }
   }
 
   Widget get _navbar {
@@ -354,7 +367,9 @@ class MainActivityState extends State<MainActivity> {
         case 1:
           return service.data.token.value.isNotEmpty
               ? const HomeScreen()
-              : const LoginScreen();
+              : _isTV
+                  ? const LoginTvScreen()
+                  : const LoginScreen();
         case 2:
           return const MangaScreen();
         default:

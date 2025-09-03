@@ -1,5 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dartotsu/Functions/Function.dart';
 import 'package:dartotsu/Screens/Settings/BaseSettingsScreen.dart';
+import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -97,7 +102,182 @@ class SettingsAccountScreenState extends BaseSettingsScreen {
           ..show(),
         onLogIn: () => Discord.warning(context),
       ),
+      ListTile(
+        leading: const Icon(Icons.tv),
+        title: Text(getString.loginOnTvTitle),
+        onTap: () => _showLoginOnTvDialog(context),
+      ),
     ];
+  }
+
+  RawDatagramSocket? _discoverySocket;
+  final Map<String, String> _discoveredTvs = {};
+
+  void _showLoginOnTvDialog(BuildContext context) {
+    final codeController = TextEditingController();
+    bool isLoading = false;
+
+    _startDiscovery();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: Text(getString.loginOnTvTitle),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isLoading)
+                    const CircularProgressIndicator()
+                  else
+                    TextField(
+                      controller: codeController,
+                      keyboardType: TextInputType.number,
+                      maxLength: 5,
+                      decoration: InputDecoration(
+                        labelText: getString.loginOnTvCodePrompt,
+                      ),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    _stopDiscovery();
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                          setState(() {
+                            isLoading = true;
+                          });
+                          await _sendTokenToTV(codeController.text);
+                          setState(() {
+                            isLoading = false;
+                          });
+                        },
+                  child: const Text('Connect'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _startDiscovery() async {
+    try {
+      _discoverySocket =
+          await RawDatagramSocket.bind(InternetAddress.anyIPv4, 45679);
+      _discoverySocket?.listen((RawSocketEvent event) {
+        if (event == RawSocketEvent.read) {
+          final datagram = _discoverySocket?.receive();
+          if (datagram != null) {
+            final message = utf8.decode(datagram.data);
+            try {
+              final data = jsonDecode(message);
+              _discoveredTvs[data['code']] = data['ip'];
+            } catch (e) {
+              // Handle message format error
+            }
+          }
+        }
+      });
+    } catch (e) {
+      // Handle listen error
+    }
+  }
+
+  void _stopDiscovery() {
+    _discoverySocket?.close();
+    _discoveredTvs.clear();
+  }
+
+  Future<String?> _getIpAddress() async {
+    for (var interface in await NetworkInterface.list()) {
+      for (var addr in interface.addresses) {
+        if (addr.type == InternetAddressType.IPv4) {
+          return addr.address;
+        }
+      }
+    }
+    return null;
+  }
+
+  void _sendTokenToTV(String code) async {
+    if (code.length != 5) {
+      snackString(getString.loginOnTvInvalidCode);
+      return;
+    }
+
+    final tvIp = _discoveredTvs[code];
+    if (tvIp == null) {
+      snackString('TV not found. Make sure you are on the same network.');
+      return;
+    }
+
+    final mobileIp = await _getIpAddress();
+    if (mobileIp == null) {
+      snackString('Could not get mobile IP address.');
+      return;
+    }
+
+    final token = Anilist.token.value;
+    if (token.isEmpty) {
+      snackString(getString.loginOnTvNoToken);
+      return;
+    }
+
+    final encryptedToken = _encryptToken(token, code);
+    final data = {
+      'token': encryptedToken,
+      'ip': mobileIp,
+    };
+
+    try {
+      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket.send(
+        utf8.encode(jsonEncode(data)),
+        InternetAddress(tvIp),
+        45678,
+      );
+      socket.close();
+
+      // Listen for confirmation
+      final confirmationSocket =
+          await RawDatagramSocket.bind(InternetAddress.anyIPv4, 45680);
+      confirmationSocket.timeout(const Duration(seconds: 10), onTimeout: (sink) {
+        snackString('Login timed out. Please try again.');
+        sink.close();
+      });
+      confirmationSocket.listen((event) {
+        if (event == RawSocketEvent.read) {
+          final datagram = confirmationSocket.receive();
+          if (datagram != null && utf8.decode(datagram.data) == 'OK') {
+            snackString(getString.loginOnTvSuccess);
+            confirmationSocket.close();
+          }
+        }
+      });
+    } catch (e) {
+      snackString(getString.loginOnTvError);
+    }
+  }
+
+  String _encryptToken(String token, String code) {
+    final key = encrypt.Key.fromUtf8(code.padRight(16));
+    final iv = encrypt.IV.fromLength(16);
+    final encrypter = encrypt.Encrypter(encrypt.AES(key));
+
+    final encrypted = encrypter.encrypt(token, iv: iv);
+    return encrypted.base64;
   }
 
   Widget _buildAccountSection(
